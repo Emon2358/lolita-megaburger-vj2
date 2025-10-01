@@ -18,8 +18,8 @@ on:
         required: true
         type: boolean
         default: false
-      apply_thermal_vision:
-        description: 'Apply Thermal Vision Effect?'
+      apply_hue_cycle:
+        description: 'Apply Hue Cycle Effect?'
         required: true
         type: boolean
         default: false
@@ -79,14 +79,13 @@ jobs:
             --tolerance ${{ github.event.inputs.tolerance }} \
             --apply-channel-shift ${{ github.event.inputs.apply_channel_shift }} \
             --apply-edge ${{ github.event.inputs.apply_edge }} \
-            --apply-thermal-vision ${{ github.event.inputs.apply_thermal_vision }} \
+            --apply-hue-cycle ${{ github.event.inputs.apply_hue_cycle }} \
             --shift-intensity ${{ github.event.inputs.shift_intensity }}
 
       - name: Convert MP4 to MOV (Fast)
         run: |
           ffmpeg -i ${{ env.MP4_VIDEO_NAME }} -preset ultrafast ${{ env.FINAL_VIDEO_NAME }}
 
-      # ★変更点: git pushの代わりにリリースを作成してアセットをアップロード
       - name: Create Release and Upload Video
         uses: softprops/action-gh-release@v1
         with:
@@ -98,7 +97,7 @@ jobs:
             - Tolerance: ${{ github.event.inputs.tolerance }}
             - Channel Shift: ${{ github.event.inputs.apply_channel_shift }}
             - Edge Detection: ${{ github.event.inputs.apply_edge }}
-            - Thermal Vision: ${{ github.event.inputs.apply_thermal_vision }}
+            - Hue Cycle: ${{ github.event.inputs.apply_hue_cycle }}
             - Shift Intensity: ${{ github.event.inputs.shift_intensity }}
 
       - name: Upload final video as artifact
