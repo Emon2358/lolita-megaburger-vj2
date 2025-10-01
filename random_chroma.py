@@ -3,10 +3,11 @@ import numpy as np
 import random
 import sys
 import argparse
-import multiprocessing
-import os
 import subprocess
-import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import os
+import logging
+from multiprocessing import Manager
 
 # --- 設定項目 ---
 INPUT_VIDEO_FG = 'video1.mp4'
@@ -14,175 +15,177 @@ INPUT_VIDEO_BG = 'video2.mp4'
 OUTPUT_VIDEO = 'final_video.mp4'
 # --- 設定はここまで ---
 
-def str2bool(v):
-    if isinstance(v, bool): return v
-    if v.lower() in ('yes', 'true', 't', 'y', '1'): return True
-    elif v.lower() in ('no', 'false', 'f', 'n', '0'): return False
-    else: raise argparse.ArgumentTypeError('Boolean value expected.')
+# ロガーの設定
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(processName)s] %(message)s', datefmt='%H:%M:%S')
 
-def apply_pixel_sort_numpy(frame, sort_amount):
-    """
-    NumPyを使用してピクセルソートを高速に実行する関数
-    """
-    height, width, _ = frame.shape
-    sorted_frame = frame.copy()
-    
-    num_rows_to_sort = int(height * sort_amount)
-    if num_rows_to_sort == 0:
-        return sorted_frame
+# --- エフェクト関数 ---
+def apply_channel_shift(frame, intensity):
+    """ BGRチャンネルをずらして色収差のような効果を出す """
+    b, g, r = cv2.split(frame)
+    b_shifted = np.roll(b, intensity, axis=1)
+    r_shifted = np.roll(r, -intensity, axis=1)
+    return cv2.merge([b_shifted, g, r_shifted])
+
+def apply_edge_detection(frame):
+    """ Cannyアルゴリズムでエッジを検出する """
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 100, 200)
+    return cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+
+def apply_thermal_vision(frame):
+    """ サーモグラフィのような見た目にする """
+    heatmap = cv2.applyColorMap(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), cv2.COLORMAP_JET)
+    return heatmap
+
+# --- フレーム処理のコア関数 ---
+def process_frame(frame_index, frame_fg_path, frame_bg_path, args, temp_dir, progress_dict, total_frames):
+    """ 1フレーム分の処理を行う """
+    try:
+        # フレーム画像を読み込む
+        frame_fg = cv2.imread(frame_fg_path)
+        frame_bg = cv2.imread(frame_bg_path)
+        if frame_fg is None or frame_bg is None:
+            return None
+
+        height, width, _ = frame_fg.shape
+        frame_bg_resized = cv2.resize(frame_bg, (width, height))
         
-    rows_indices = np.random.choice(height, size=num_rows_to_sort, replace=False)
-    
-    rows_to_sort = sorted_frame[rows_indices, :]
-    
-    luminance = rows_to_sort @ np.array([0.114, 0.587, 0.299]) # BGRの重み
-    
-    sorted_indices = np.argsort(luminance, axis=1)
-    
-    I, J = np.ogrid[:rows_to_sort.shape[0], :rows_to_sort.shape[1]]
-    sorted_rows = rows_to_sort[I, sorted_indices]
-    
-    sorted_frame[rows_indices, :] = sorted_rows
-    
-    return sorted_frame
-
-
-def process_frame_chunk(chunk_info):
-    """
-    動画の特定の部分（チャンク）を処理するワーカー関数。
-    """
-    start_frame, end_frame, process_id, args, video_props = chunk_info
-    
-    cap_fg = cv2.VideoCapture(INPUT_VIDEO_FG)
-    cap_bg = cv2.VideoCapture(INPUT_VIDEO_BG)
-    
-    if not cap_fg.isOpened() or not cap_bg.isOpened():
-        print(f"[Process {process_id}] Error opening video files.")
-        return None
-
-    cap_fg.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-    cap_bg.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-
-    temp_output_filename = f"temp_part_{process_id}.mp4"
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(temp_output_filename, fourcc, video_props['fps'], (video_props['width'], video_props['height']))
-
-    for frame_num in range(start_frame, end_frame):
-        ret_fg, frame_fg = cap_fg.read()
-        ret_bg, frame_bg = cap_bg.read()
-
-        if not ret_fg or not ret_bg:
-            break
-
-        # ★追加: コンソールのスパムを防ぐため、一定間隔でログを出力
-        log_interval = 30 # 30フレームごとにログを出力
-        if (frame_num - start_frame) % log_interval == 0:
-            # プロセスIDと、全体の何フレーム目かを分かりやすく表示
-            print(f"[Process {process_id:02d}] Processing frame {frame_num + 1} / {video_props['total_frames']}")
-
-        frame_bg_resized = cv2.resize(frame_bg, (video_props['width'], video_props['height']))
+        # クロマキー処理
         random_color_bgr = np.array([random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)])
-        
-        lower_bound = np.clip(random_color_bgr - args.tolerance, 0, 255)
-        upper_bound = np.clip(random_color_bgr + args.tolerance, 0, 255)
+        tolerance = int(args.tolerance)
+        lower_bound = np.clip(random_color_bgr - tolerance, 0, 255)
+        upper_bound = np.clip(random_color_bgr + tolerance, 0, 255)
         mask = cv2.inRange(frame_fg, lower_bound, upper_bound)
         mask_inv = cv2.bitwise_not(mask)
         fg_masked = cv2.bitwise_and(frame_fg, frame_fg, mask=mask_inv)
         bg_masked = cv2.bitwise_and(frame_bg_resized, frame_bg_resized, mask=mask)
-        output_frame = cv2.add(fg_masked, bg_masked)
+        processed_frame = cv2.add(fg_masked, bg_masked)
 
+        # 選択されたエフェクトを適用
         if args.apply_channel_shift:
-            b, g, r = cv2.split(output_frame)
-            shift = args.shift_intensity
-            b = np.roll(b, shift, axis=1)
-            r = np.roll(r, -shift, axis=1)
-            output_frame = cv2.merge([b, g, r])
-
+            processed_frame = apply_channel_shift(processed_frame, int(args.shift_intensity))
         if args.apply_edge:
-            gray = cv2.cvtColor(output_frame, cv2.COLOR_BGR2GRAY)
-            laplacian = cv2.Laplacian(gray, cv2.CV_64F)
-            edges = cv2.convertScaleAbs(laplacian)
-            output_frame = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
-
+            processed_frame = apply_edge_detection(processed_frame)
         if args.apply_thermal_vision:
-            if len(output_frame.shape) == 2 or output_frame.shape[2] == 1: gray = output_frame
-            else: gray = cv2.cvtColor(output_frame, cv2.COLOR_BGR2GRAY)
-            output_frame = cv2.applyColorMap(gray, cv2.COLORMAP_HOT)
+            processed_frame = apply_thermal_vision(processed_frame)
 
-        if args.apply_pixel_sort:
-            output_frame = apply_pixel_sort_numpy(output_frame, args.sort_amount)
+        # 処理済みフレームを一時ファイルとして保存
+        output_path = os.path.join(temp_dir, f"frame_{frame_index:06d}.png")
+        cv2.imwrite(output_path, processed_frame)
+
+        # 進捗を更新してログ出力
+        process_name = f"Core-{os.getpid() % 100}"
+        with progress_dict['lock']:
+            progress_dict['count'] += 1
+            count = progress_dict['count']
         
-        out.write(output_frame)
+        if count % 20 == 0 or count == total_frames: # 20フレームごと、または最後のフレームでログ出力
+             logging.info(f"[{process_name}] Processed frame {frame_index+1} ({count}/{total_frames})")
 
-    cap_fg.release()
-    cap_bg.release()
-    out.release()
+        return output_path
+    except Exception as e:
+        logging.error(f"Error processing frame {frame_index}: {e}")
+        return None
+
+# --- 動画の前処理・後処理 ---
+def extract_frames(video_path, output_dir):
+    """ 動画から全フレームを画像として抽出する """
+    logging.info(f"Extracting frames from {video_path}...")
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        logging.error(f"Could not open video: {video_path}")
+        return 0
     
-    # ★変更: 以前の進捗表示を削除し、完了ログをより明確に
-    print(f"[Process {process_id:02d}] Chunk ({start_frame + 1}-{end_frame}) processing complete.")
+    count = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        cv2.imwrite(os.path.join(output_dir, f"frame_{count:06d}.png"), frame)
+        count += 1
+    cap.release()
+    logging.info(f"Extracted {count} frames.")
+    return count
 
-    return temp_output_filename
+def combine_frames_to_video(frame_dir, output_path, fps, width, height):
+    """ 画像フレームを動画に結合する """
+    logging.info("Combining frames into final video...")
+    # ffmpegを使用して高速に動画を生成
+    command = [
+        'ffmpeg',
+        '-y', # Overwrite output file if it exists
+        '-framerate', str(fps),
+        '-i', os.path.join(frame_dir, 'frame_%06d.png'),
+        '-c:v', 'libx264',
+        '-pix_fmt', 'yuv420p',
+        '-s', f'{width}x{height}',
+        output_path
+    ]
+    subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    logging.info(f"Video saved to {output_path}")
+
+# --- メイン実行関数 ---
+def main(args):
+    """ メインの処理フロー """
+    cap_fg = cv2.VideoCapture(INPUT_VIDEO_FG)
+    if not cap_fg.isOpened():
+        logging.error(f"Error opening video: {INPUT_VIDEO_FG}")
+        return
+
+    width = int(cap_fg.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap_fg.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap_fg.get(cv2.CAP_PROP_FPS)
+    total_frames_fg = int(cap_fg.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap_fg.release()
+
+    cap_bg = cv2.VideoCapture(INPUT_VIDEO_BG)
+    total_frames_bg = int(cap_bg.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap_bg.release()
+    
+    total_frames = min(total_frames_fg, total_frames_bg)
+
+    # 一時ディレクトリを作成
+    temp_fg_dir = "temp_fg_frames"
+    temp_bg_dir = "temp_bg_frames"
+    temp_processed_dir = "temp_processed_frames"
+    os.makedirs(temp_fg_dir, exist_ok=True)
+    os.makedirs(temp_bg_dir, exist_ok=True)
+    os.makedirs(temp_processed_dir, exist_ok=True)
+    
+    # フレームを抽出
+    extract_frames(INPUT_VIDEO_FG, temp_fg_dir)
+    extract_frames(INPUT_VIDEO_BG, temp_bg_dir)
+
+    # 並列処理
+    num_cores = os.cpu_count() or 2
+    logging.info(f"Starting parallel processing on {num_cores} cores...")
+    
+    with Manager() as manager:
+        progress_dict = manager.dict({'count': 0, 'lock': manager.Lock()})
+        with ProcessPoolExecutor(max_workers=num_cores) as executor:
+            futures = [executor.submit(process_frame, i, os.path.join(temp_fg_dir, f"frame_{i:06d}.png"), os.path.join(temp_bg_dir, f"frame_{i:06d}.png"), args, temp_processed_dir, progress_dict, total_frames) for i in range(total_frames)]
+            
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    logging.error(f"A task generated an exception: {e}")
+
+    # フレームを動画に結合
+    combine_frames_to_video(temp_processed_dir, OUTPUT_VIDEO, fps, width, height)
+
+    # 一時ディレクトリをクリーンアップ
+    logging.info("Cleaning up temporary files...")
+    subprocess.run(['rm', '-rf', temp_fg_dir, temp_bg_dir, temp_processed_dir])
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='動画にクロマキーと複数の激しい特殊エフェクトを並列処理で適用します。')
-    parser.add_argument('--tolerance', type=int, default=50)
-    parser.add_argument('--apply-channel-shift', type=str2bool, default=False)
-    parser.add_argument('--apply-edge', type=str2bool, default=False)
-    parser.add_argument('--apply-thermal-vision', type=str2bool, default=False)
-    parser.add_argument('--apply-pixel-sort', type=str2bool, default=False)
-    parser.add_argument('--shift-intensity', type=int, default=10)
-    parser.add_argument('--sort-amount', type=float, default=0.2)
-    
+    parser = argparse.ArgumentParser(description='Apply multiple effects to a video with chroma key.')
+    parser.add_argument('--tolerance', type=str, default='50')
+    # ★変更点: ピクセルソートに関する引数を削除
+    parser.add_argument('--apply-channel-shift', type=lambda x: (str(x).lower() == 'true'))
+    parser.add_argument('--apply-edge', type=lambda x: (str(x).lower() == 'true'))
+    parser.add_argument('--apply-thermal-vision', type=lambda x: (str(x).lower() == 'true'))
+    parser.add_argument('--shift-intensity', type=str, default='10')
+
     args = parser.parse_args()
-
-    cap = cv2.VideoCapture(INPUT_VIDEO_FG)
-    if not cap.isOpened():
-        print(f"エラー: {INPUT_VIDEO_FG} を開けませんでした。")
-        sys.exit(1)
-        
-    video_props = {
-        'width': int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-        'height': int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
-        'fps': cap.get(cv2.CAP_PROP_FPS),
-        'total_frames': int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    }
-    cap.release()
-
-    num_processes = int(os.environ.get('NUM_CORES', multiprocessing.cpu_count()))
-    frames_per_process = video_props['total_frames'] // num_processes
-    
-    chunks = []
-    for i in range(num_processes):
-        start_frame = i * frames_per_process
-        end_frame = (i + 1) * frames_per_process
-        if i == num_processes - 1:
-            end_frame = video_props['total_frames'] 
-        chunks.append((start_frame, end_frame, i, args, video_props))
-
-    print(f"{video_props['total_frames']} フレームを {num_processes} 個のCPUコアで並列処理します...")
-    start_time = time.time()
-
-    with multiprocessing.Pool(processes=num_processes) as pool:
-        temp_files = pool.map(process_frame_chunk, chunks)
-    
-    print(f"\nすべてのチャンクの処理が完了しました。結合しています...")
-    
-    temp_files = [f for f in temp_files if f is not None]
-    with open("concat_list.txt", "w") as f:
-        for temp_file in temp_files:
-            f.write(f"file '{temp_file}'\n")
-
-    subprocess.run(
-        ["ffmpeg", "-f", "concat", "-safe", "0", "-i", "concat_list.txt", "-c", "copy", OUTPUT_VIDEO],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
-
-    os.remove("concat_list.txt")
-    for temp_file in temp_files:
-        os.remove(temp_file)
-
-    end_time = time.time()
-    print(f"動画処理が完了しました。'{OUTPUT_VIDEO}' として保存されました。")
-    print(f"合計処理時間: {end_time - start_time:.2f} 秒")
+    main(args)
