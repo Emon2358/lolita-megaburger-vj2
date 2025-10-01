@@ -81,7 +81,8 @@ jobs:
 
       - name: Download input videos
         run: |
-          wget https://github.com/Emon2358/494p9downloader/raw/main/downloads/sm9875066.mp4 -O video1.mp4
+          # ★修正点: URLのタイプミス (494p9downloader -> 4949downloader) を修正
+          wget https://github.com/Emon2358/4949downloader/raw/main/downloads/sm9875066.mp4 -O video1.mp4
           wget https://github.com/Emon2358/4949downloader/raw/main/downloads/sm39403653.mp4 -O video2.mp4
 
       - name: Run video processing script
