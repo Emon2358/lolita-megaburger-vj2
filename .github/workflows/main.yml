@@ -8,17 +8,27 @@ on:
         required: true
         default: '50'
         type: string
-      effect:
-        description: 'Special Effect to Apply'
+      apply_channel_shift:
+        description: 'Apply Channel Shift Effect?'
         required: true
-        default: 'none'
-        type: choice
-        options:
-          - none
-          - channel_shift
-          - edge
-          - thermal_vision
-          - pixel_sort
+        type: boolean
+        default: false
+      apply_edge:
+        description: 'Apply Edge Detection Effect?'
+        required: true
+        type: boolean
+        default: false
+      apply_thermal_vision:
+        description: 'Apply Thermal Vision Effect?'
+        required: true
+        type: boolean
+        default: false
+      apply_pixel_sort:
+        description: 'Apply Pixel Sort Effect?'
+        required: true
+        type: boolean
+        default: false
+      # --- エフェクトごとのパラメータ ---
       shift_intensity:
         description: 'Intensity for Channel Shift effect (e.g., 10)'
         required: true
@@ -70,7 +80,10 @@ jobs:
         run: |
           python random_chroma.py \
             --tolerance ${{ github.event.inputs.tolerance }} \
-            --effect ${{ github.event.inputs.effect }} \
+            --apply-channel-shift ${{ github.event.inputs.apply_channel_shift }} \
+            --apply-edge ${{ github.event.inputs.apply_edge }} \
+            --apply-thermal-vision ${{ github.event.inputs.apply_thermal_vision }} \
+            --apply-pixel-sort ${{ github.event.inputs.apply_pixel_sort }} \
             --shift-intensity ${{ github.event.inputs.shift_intensity }} \
             --sort-amount ${{ github.event.inputs.sort_amount }}
 
