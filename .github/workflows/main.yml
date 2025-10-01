@@ -23,31 +23,18 @@ on:
         required: true
         type: boolean
         default: false
-      apply_pixel_sort:
-        description: 'Apply Pixel Sort Effect?'
-        required: true
-        type: boolean
-        default: false
       shift_intensity:
         description: 'Intensity for Channel Shift effect (e.g., 10)'
         required: true
         default: '10'
         type: string
-      sort_amount:
-        description: 'Amount of rows to apply Pixel Sort (0.0 to 1.0)'
-        required: true
-        default: '0.2'
-        type: string
 
 env:
   MP4_VIDEO_NAME: 'final_video.mp4'
   FINAL_VIDEO_NAME: 'final_video.mov'
-  # ★変更点: 標準ランナーに合わせてコア数を2に変更
-  NUM_CORES: 2
 
 jobs:
   process_and_upload:
-    # ★変更点: 有料プランが必要な4コアランナーから、標準のランナーに変更
     runs-on: ubuntu-latest
     
     permissions:
@@ -93,9 +80,7 @@ jobs:
             --apply-channel-shift ${{ github.event.inputs.apply_channel_shift }} \
             --apply-edge ${{ github.event.inputs.apply_edge }} \
             --apply-thermal-vision ${{ github.event.inputs.apply_thermal_vision }} \
-            --apply-pixel-sort ${{ github.event.inputs.apply_pixel_sort }} \
-            --shift-intensity ${{ github.event.inputs.shift_intensity }} \
-            --sort-amount ${{ github.event.inputs.sort_amount }}
+            --shift-intensity ${{ github.event.inputs.shift_intensity }}
 
       - name: Convert MP4 to MOV (Fast)
         run: |
