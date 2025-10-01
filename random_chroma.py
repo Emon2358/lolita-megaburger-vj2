@@ -32,10 +32,19 @@ def apply_edge_detection(frame):
     edges = cv2.Canny(gray, 100, 200)
     return cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
 
-def apply_thermal_vision(frame):
-    """ サーモグラフィのような見た目にする """
-    heatmap = cv2.applyColorMap(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), cv2.COLORMAP_JET)
-    return heatmap
+# ★追加: ヒューサイクルエフェクト
+def apply_hue_cycle_effect(frame, frame_index):
+    """ 映像の色相をフレーム番号に応じて変化させる """
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
+    
+    # 色相(H)をフレーム番号に応じてずらす (OpenCVのHは0-179)
+    # これにより、色が滑らかに変化し続ける
+    h = ((h.astype(int) + frame_index * 2) % 180).astype(np.uint8)
+    
+    hsv_shifted = cv2.merge([h, s, v])
+    return cv2.cvtColor(hsv_shifted, cv2.COLOR_HSV2BGR)
+
 
 # --- フレーム処理のコア関数 ---
 def process_frame(frame_index, frame_fg_path, frame_bg_path, args, temp_dir, progress_dict, total_frames):
@@ -66,8 +75,9 @@ def process_frame(frame_index, frame_fg_path, frame_bg_path, args, temp_dir, pro
             processed_frame = apply_channel_shift(processed_frame, int(args.shift_intensity))
         if args.apply_edge:
             processed_frame = apply_edge_detection(processed_frame)
-        if args.apply_thermal_vision:
-            processed_frame = apply_thermal_vision(processed_frame)
+        # ★変更点: コラムストレッチをヒューサイクルに変更
+        if args.apply_hue_cycle:
+            processed_frame = apply_hue_cycle_effect(processed_frame, frame_index)
 
         # 処理済みフレームを一時ファイルとして保存
         output_path = os.path.join(temp_dir, f"frame_{frame_index:06d}.png")
@@ -181,11 +191,12 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Apply multiple effects to a video with chroma key.')
     parser.add_argument('--tolerance', type=str, default='50')
-    # ★変更点: ピクセルソートに関する引数を削除
     parser.add_argument('--apply-channel-shift', type=lambda x: (str(x).lower() == 'true'))
     parser.add_argument('--apply-edge', type=lambda x: (str(x).lower() == 'true'))
-    parser.add_argument('--apply-thermal-vision', type=lambda x: (str(x).lower() == 'true'))
+    # ★変更点: コラムストレッチをヒューサイクルに変更
+    parser.add_argument('--apply-hue-cycle', type=lambda x: (str(x).lower() == 'true'))
     parser.add_argument('--shift-intensity', type=str, default='10')
+
 
     args = parser.parse_args()
     main(args)
