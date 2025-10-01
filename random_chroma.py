@@ -20,14 +20,39 @@ def str2bool(v):
     elif v.lower() in ('no', 'false', 'f', 'n', '0'): return False
     else: raise argparse.ArgumentTypeError('Boolean value expected.')
 
-# ★変更点: この関数が各CPUコアで並列実行される
+def apply_pixel_sort_numpy(frame, sort_amount):
+    """
+    NumPyを使用してピクセルソートを高速に実行する関数
+    """
+    height, width, _ = frame.shape
+    sorted_frame = frame.copy()
+    
+    num_rows_to_sort = int(height * sort_amount)
+    if num_rows_to_sort == 0:
+        return sorted_frame
+        
+    rows_indices = np.random.choice(height, size=num_rows_to_sort, replace=False)
+    
+    rows_to_sort = sorted_frame[rows_indices, :]
+    
+    luminance = rows_to_sort @ np.array([0.114, 0.587, 0.299]) # BGRの重み
+    
+    sorted_indices = np.argsort(luminance, axis=1)
+    
+    I, J = np.ogrid[:rows_to_sort.shape[0], :rows_to_sort.shape[1]]
+    sorted_rows = rows_to_sort[I, sorted_indices]
+    
+    sorted_frame[rows_indices, :] = sorted_rows
+    
+    return sorted_frame
+
+
 def process_frame_chunk(chunk_info):
     """
     動画の特定の部分（チャンク）を処理するワーカー関数。
     """
     start_frame, end_frame, process_id, args, video_props = chunk_info
     
-    # 各プロセスでビデオキャプチャを再度開く
     cap_fg = cv2.VideoCapture(INPUT_VIDEO_FG)
     cap_bg = cv2.VideoCapture(INPUT_VIDEO_BG)
     
@@ -35,11 +60,9 @@ def process_frame_chunk(chunk_info):
         print(f"[Process {process_id}] Error opening video files.")
         return None
 
-    # チャンクの開始フレームまでシーク
     cap_fg.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
     cap_bg.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
-    # 一時的な出力ファイルを設定
     temp_output_filename = f"temp_part_{process_id}.mp4"
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(temp_output_filename, fourcc, video_props['fps'], (video_props['width'], video_props['height']))
@@ -51,7 +74,12 @@ def process_frame_chunk(chunk_info):
         if not ret_fg or not ret_bg:
             break
 
-        # --- ここから下の処理は元のコードと同じ ---
+        # ★追加: コンソールのスパムを防ぐため、一定間隔でログを出力
+        log_interval = 30 # 30フレームごとにログを出力
+        if (frame_num - start_frame) % log_interval == 0:
+            # プロセスIDと、全体の何フレーム目かを分かりやすく表示
+            print(f"[Process {process_id:02d}] Processing frame {frame_num + 1} / {video_props['total_frames']}")
+
         frame_bg_resized = cv2.resize(frame_bg, (video_props['width'], video_props['height']))
         random_color_bgr = np.array([random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)])
         
@@ -82,30 +110,19 @@ def process_frame_chunk(chunk_info):
             output_frame = cv2.applyColorMap(gray, cv2.COLORMAP_HOT)
 
         if args.apply_pixel_sort:
-            sorted_frame = output_frame.copy()
-            num_rows_to_sort = int(video_props['height'] * args.sort_amount)
-            rows_to_sort = random.sample(range(video_props['height']), num_rows_to_sort)
-            for y in rows_to_sort:
-                row = sorted_frame[y, :]
-                sorted_row = sorted(row, key=lambda p: p[0]*0.114 + p[1]*0.587 + p[2]*0.299 if len(p) == 3 else p[0], reverse=random.choice([True, False]))
-                sorted_frame[y, :] = np.array(sorted_row, dtype=np.uint8)
-            output_frame = sorted_frame
+            output_frame = apply_pixel_sort_numpy(output_frame, args.sort_amount)
         
         out.write(output_frame)
-        # --- ここまで元のコードと同じ ---
 
-    # リソースを解放
     cap_fg.release()
     cap_bg.release()
     out.release()
     
-    # 処理の進捗を表示
-    sys.stdout.write(f"\rチャンク {process_id+1} の処理が完了しました。")
-    sys.stdout.flush()
+    # ★変更: 以前の進捗表示を削除し、完了ログをより明確に
+    print(f"[Process {process_id:02d}] Chunk ({start_frame + 1}-{end_frame}) processing complete.")
 
     return temp_output_filename
 
-# ★変更点: メインの処理を並列化の管理ロジックに変更
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='動画にクロマキーと複数の激しい特殊エフェクトを並列処理で適用します。')
     parser.add_argument('--tolerance', type=int, default=50)
@@ -118,7 +135,6 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
 
-    # --- 1. 動画の基本情報を取得 ---
     cap = cv2.VideoCapture(INPUT_VIDEO_FG)
     if not cap.isOpened():
         print(f"エラー: {INPUT_VIDEO_FG} を開けませんでした。")
@@ -132,8 +148,7 @@ if __name__ == '__main__':
     }
     cap.release()
 
-    # --- 2. 並列処理の準備 ---
-    num_processes = multiprocessing.cpu_count()
+    num_processes = int(os.environ.get('NUM_CORES', multiprocessing.cpu_count()))
     frames_per_process = video_props['total_frames'] // num_processes
     
     chunks = []
@@ -141,25 +156,22 @@ if __name__ == '__main__':
         start_frame = i * frames_per_process
         end_frame = (i + 1) * frames_per_process
         if i == num_processes - 1:
-            end_frame = video_props['total_frames'] # 最後のプロセスは残り全部を処理
+            end_frame = video_props['total_frames'] 
         chunks.append((start_frame, end_frame, i, args, video_props))
 
     print(f"{video_props['total_frames']} フレームを {num_processes} 個のCPUコアで並列処理します...")
     start_time = time.time()
 
-    # --- 3. プロセスプールで並列処理を実行 ---
     with multiprocessing.Pool(processes=num_processes) as pool:
         temp_files = pool.map(process_frame_chunk, chunks)
     
     print(f"\nすべてのチャンクの処理が完了しました。結合しています...")
     
-    # --- 4. 分割された動画ファイルを結合 ---
     temp_files = [f for f in temp_files if f is not None]
     with open("concat_list.txt", "w") as f:
         for temp_file in temp_files:
             f.write(f"file '{temp_file}'\n")
 
-    # ffmpegを使って結合
     subprocess.run(
         ["ffmpeg", "-f", "concat", "-safe", "0", "-i", "concat_list.txt", "-c", "copy", OUTPUT_VIDEO],
         check=True,
@@ -167,7 +179,6 @@ if __name__ == '__main__':
         stderr=subprocess.DEVNULL
     )
 
-    # --- 5. 一時ファイルを削除 ---
     os.remove("concat_list.txt")
     for temp_file in temp_files:
         os.remove(temp_file)
