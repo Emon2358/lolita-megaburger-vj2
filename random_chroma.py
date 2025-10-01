@@ -10,6 +10,17 @@ INPUT_VIDEO_BG = 'video2.mp4'
 OUTPUT_VIDEO = 'final_video.mp4'
 # --- 設定はここまで ---
 
+# ★追加: ワークフローからの 'true'/'false' 文字列をbool値に変換する関数
+def str2bool(v):
+    if isinstance(v, bool):
+       return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
 def process_video(args):
     cap_fg = cv2.VideoCapture(INPUT_VIDEO_FG)
     cap_bg = cv2.VideoCapture(INPUT_VIDEO_BG)
@@ -57,38 +68,41 @@ def process_video(args):
 
         output_frame = chroma_frame
 
+        # ★変更点: if/elifから連続したif文に変更し、エフェクトを重ねがけできるようにする
+        
         # チャンネルシフトエフェクトを適用
-        if args.effect == 'channel_shift':
-            b, g, r = cv2.split(chroma_frame)
+        if args.apply_channel_shift:
+            b, g, r = cv2.split(output_frame)
             shift = args.shift_intensity
             b = np.roll(b, shift, axis=1)
             r = np.roll(r, -shift, axis=1)
             output_frame = cv2.merge([b, g, r])
 
         # エッジ検出エフェクトを適用
-        elif args.effect == 'edge':
-            gray = cv2.cvtColor(chroma_frame, cv2.COLOR_BGR2GRAY)
+        if args.apply_edge:
+            gray = cv2.cvtColor(output_frame, cv2.COLOR_BGR2GRAY)
             laplacian = cv2.Laplacian(gray, cv2.CV_64F)
             edges = cv2.convertScaleAbs(laplacian)
             output_frame = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
 
         # サーマルビジョンエフェクト
-        elif args.effect == 'thermal_vision':
-            gray = cv2.cvtColor(chroma_frame, cv2.COLOR_BGR2GRAY)
+        if args.apply_thermal_vision:
+            # エッジ検出などでグレースケールになっている可能性を考慮
+            if len(output_frame.shape) == 2 or output_frame.shape[2] == 1:
+                 gray = output_frame
+            else:
+                 gray = cv2.cvtColor(output_frame, cv2.COLOR_BGR2GRAY)
             output_frame = cv2.applyColorMap(gray, cv2.COLORMAP_HOT)
 
-        # ★追加: ピクセルソートエフェクト
-        elif args.effect == 'pixel_sort':
-            sorted_frame = chroma_frame.copy()
-            # ソートする行の数を決定
+        # ピクセルソートエフェクト
+        if args.apply_pixel_sort:
+            sorted_frame = output_frame.copy()
             num_rows_to_sort = int(height * args.sort_amount)
-            # ランダムにソートする行を選択
             rows_to_sort = random.sample(range(height), num_rows_to_sort)
             for y in rows_to_sort:
                 row = sorted_frame[y, :]
-                # 行のピクセルを明るさに基づいてソート
-                # 'mergesort'は安定ソート
-                sorted_row = sorted(row, key=lambda p: p[0]*0.114 + p[1]*0.587 + p[2]*0.299, reverse=random.choice([True, False]))
+                # ピクセルの明るさに基づいてソート
+                sorted_row = sorted(row, key=lambda p: p[0]*0.114 + p[1]*0.587 + p[2]*0.299 if len(p) == 3 else p[0], reverse=random.choice([True, False]))
                 sorted_frame[y, :] = np.array(sorted_row, dtype=np.uint8)
             output_frame = sorted_frame
 
@@ -103,10 +117,13 @@ def process_video(args):
     cv2.destroyAllWindows()
 
 if __name__ == '__main__':
-    # ★変更点: エフェクトの選択肢とパラメータを更新
-    parser = argparse.ArgumentParser(description='動画にクロマキーと激しい特殊エフェクトを適用します。')
+    # ★変更点: エフェクト指定を個別のboolフラグに変更
+    parser = argparse.ArgumentParser(description='動画にクロマキーと複数の激しい特殊エフェクトを適用します。')
     parser.add_argument('--tolerance', type=int, default=50, help='クロマキーの色の許容度 (0-255)')
-    parser.add_argument('--effect', type=str, default='none', choices=['none', 'channel_shift', 'edge', 'thermal_vision', 'pixel_sort'], help='適用する特殊エフェクト')
+    parser.add_argument('--apply-channel-shift', type=str2bool, default=False, help='チャンネルシフトエフェクトを適用するかどうか')
+    parser.add_argument('--apply-edge', type=str2bool, default=False, help='エッジ検出エフェクトを適用するかどうか')
+    parser.add_argument('--apply-thermal-vision', type=str2bool, default=False, help='サーマルビジョンエフェクトを適用するかどうか')
+    parser.add_argument('--apply-pixel-sort', type=str2bool, default=False, help='ピクセルソートエフェクトを適用するかどうか')
     parser.add_argument('--shift-intensity', type=int, default=10, help='チャンネルシフトエフェクトの強さ（ずらすピクセル数）')
     parser.add_argument('--sort-amount', type=float, default=0.2, help='ピクセルソートを適用する行の割合 (0.0-1.0)')
     
