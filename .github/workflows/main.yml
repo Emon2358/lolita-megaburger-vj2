@@ -86,14 +86,20 @@ jobs:
         run: |
           ffmpeg -i ${{ env.MP4_VIDEO_NAME }} -preset ultrafast ${{ env.FINAL_VIDEO_NAME }}
 
-      - name: Commit and push final video
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git pull
-          git add ${{ env.FINAL_VIDEO_NAME }}
-          git commit -m "Add/Update final video as MOV (workflow run ${{ github.run_id }})" || echo "No changes to commit"
-          git push
+      # ★変更点: git pushの代わりにリリースを作成してアセットをアップロード
+      - name: Create Release and Upload Video
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ env.FINAL_VIDEO_NAME }}
+          tag_name: video-${{ github.run_id }}
+          name: "Video from workflow #${{ github.run_id }}"
+          body: |
+            Video generated with the following parameters:
+            - Tolerance: ${{ github.event.inputs.tolerance }}
+            - Channel Shift: ${{ github.event.inputs.apply_channel_shift }}
+            - Edge Detection: ${{ github.event.inputs.apply_edge }}
+            - Thermal Vision: ${{ github.event.inputs.apply_thermal_vision }}
+            - Shift Intensity: ${{ github.event.inputs.shift_intensity }}
 
       - name: Upload final video as artifact
         uses: actions/upload-artifact@v4
