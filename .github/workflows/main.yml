@@ -1,0 +1,103 @@
+name: Video Processing & Upload Workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      tolerance:
+        description: 'Chroma Key Tolerance (0-255)'
+        required: true
+        default: '50'
+        type: string
+      effect:
+        description: 'Special Effect to Apply'
+        required: true
+        default: 'none'
+        type: choice
+        options:
+          - none
+          - channel_shift
+          - edge
+          - thermal_vision
+          - pixel_sort
+      shift_intensity:
+        description: 'Intensity for Channel Shift effect (e.g., 10)'
+        required: true
+        default: '10'
+        type: string
+      sort_amount:
+        description: 'Amount of rows to apply Pixel Sort (0.0 to 1.0)'
+        required: true
+        default: '0.2'
+        type: string
+
+env:
+  MP4_VIDEO_NAME: 'final_video.mp4'
+  FINAL_VIDEO_NAME: 'final_video.mov'
+
+jobs:
+  process_and_upload:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write  
+
+    steps:
+      # 1. リポジトリをチェックアウト
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # 2. Python 3.x 環境をセットアップ
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      # 3. 必要なライブラリをインストール
+      - name: Install Python dependencies
+        run: |
+          pip install opencv-python numpy
+
+      # 4. 処理対象の動画をURLからダウンロード
+      - name: Download input videos
+        run: |
+          wget https://github.com/Emon2358/4949downloader/raw/main/downloads/sm9875066.mp4 -O video1.mp4
+          wget https://github.com/Emon2358/4949downloader/raw/main/downloads/sm39403653.mp4 -O video2.mp4
+
+      # 5. Pythonスクリプトを実行
+      - name: Run video processing script
+        run: |
+          python random_chroma.py \
+            --tolerance ${{ github.event.inputs.tolerance }} \
+            --effect ${{ github.event.inputs.effect }} \
+            --shift-intensity ${{ github.event.inputs.shift_intensity }} \
+            --sort-amount ${{ github.event.inputs.sort_amount }}
+
+      # 6. ffmpegをインストール
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      # 7. ffmpegを使ってMP4をMOVに変換
+      - name: Convert MP4 to MOV
+        run: |
+          ffmpeg -i ${{ env.MP4_VIDEO_NAME }} ${{ env.FINAL_VIDEO_NAME }}
+
+      # 8. 完成した動画 (MOV) を main ブランチにコミット & プッシュ
+      - name: Commit and push final video
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull
+          git add ${{ env.FINAL_VIDEO_NAME }}
+          git commit -m "Add/Update final video as MOV (workflow run ${{ github.run_id }})" || echo "No changes to commit"
+          git push
+
+      # 9. (オプション) アーティファクトとしてもアップロード
+      - name: Upload final video as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-video
+          path: ${{ env.FINAL_VIDEO_NAME }}
