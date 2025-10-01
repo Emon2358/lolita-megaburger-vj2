@@ -42,28 +42,26 @@ on:
 env:
   MP4_VIDEO_NAME: 'final_video.mp4'
   FINAL_VIDEO_NAME: 'final_video.mov'
+  NUM_CORES: 4
 
 jobs:
   process_and_upload:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest-4-cores
     
     permissions:
       contents: write  
 
     steps:
-      # 1. リポジトリをチェックアウト
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # 2. Python 3.x 環境をセットアップ
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.x'
 
-      # 3. Pythonライブラリのキャッシュ
       - name: Cache pip packages
         uses: actions/cache@v4
         with:
@@ -72,24 +70,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      # 4. 必要なPythonライブラリをインストール
       - name: Install Python dependencies
         run: |
           pip install opencv-python numpy
 
-      # 5. ffmpegをインストール (Pythonスクリプトが内部で利用するため先に実行)
       - name: Install ffmpeg
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
-      # 6. 処理対象の動画をURLからダウンロード
       - name: Download input videos
         run: |
-          wget https://github.com/Emon2358/4949downloader/raw/main/downloads/sm9875066.mp4 -O video1.mp4
+          wget https://github.com/Emon2358/494p9downloader/raw/main/downloads/sm9875066.mp4 -O video1.mp4
           wget https://github.com/Emon2358/4949downloader/raw/main/downloads/sm39403653.mp4 -O video2.mp4
 
-      # 7. Pythonスクリプトを実行して動画を処理
       - name: Run video processing script
         run: |
           python random_chroma.py \
@@ -101,12 +95,10 @@ jobs:
             --shift-intensity ${{ github.event.inputs.shift_intensity }} \
             --sort-amount ${{ github.event.inputs.sort_amount }}
 
-      # 8. ffmpegを使ってMP4をMOVに変換 (高速化プリセット使用)
       - name: Convert MP4 to MOV (Fast)
         run: |
           ffmpeg -i ${{ env.MP4_VIDEO_NAME }} -preset ultrafast ${{ env.FINAL_VIDEO_NAME }}
 
-      # 9. 完成した動画 (MOV) を main ブランチにコミット & プッシュ
       - name: Commit and push final video
         run: |
           git config user.name "github-actions[bot]"
@@ -116,7 +108,6 @@ jobs:
           git commit -m "Add/Update final video as MOV (workflow run ${{ github.run_id }})" || echo "No changes to commit"
           git push
 
-      # 10. (オプション) アーティファクトとしてもアップロード
       - name: Upload final video as artifact
         uses: actions/upload-artifact@v4
         with:
