@@ -42,11 +42,13 @@ on:
 env:
   MP4_VIDEO_NAME: 'final_video.mp4'
   FINAL_VIDEO_NAME: 'final_video.mov'
-  NUM_CORES: 4
+  # ★変更点: 標準ランナーに合わせてコア数を2に変更
+  NUM_CORES: 2
 
 jobs:
   process_and_upload:
-    runs-on: ubuntu-latest-4-cores
+    # ★変更点: 有料プランが必要な4コアランナーから、標準のランナーに変更
+    runs-on: ubuntu-latest
     
     permissions:
       contents: write  
@@ -81,7 +83,6 @@ jobs:
 
       - name: Download input videos
         run: |
-          # ★修正点: URLのタイプミス (494p9downloader -> 4949downloader) を修正
           wget https://github.com/Emon2358/4949downloader/raw/main/downloads/sm9875066.mp4 -O video1.mp4
           wget https://github.com/Emon2358/4949downloader/raw/main/downloads/sm39403653.mp4 -O video2.mp4
 
